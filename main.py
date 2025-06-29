@@ -10,38 +10,47 @@ import openai
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
+"""
+Project Cubix
+Hospitality AI WhatsApp Bot
+Team: Yash, Krish, Devansh
+"""
 
-# ENVIRONMENT & CONFIG SETUP
-load_dotenv()  # Load variables from .env
+#ENVIRONMENT SETUP
+load_dotenv()
 
 app = Flask(__name__)
-app.config.from_pyfile('config.py')
+app.config['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+app.config['TWILIO_ACCOUNT_SID'] = os.getenv("TWILIO_ACCOUNT_SID")
+app.config['TWILIO_AUTH_TOKEN'] = os.getenv("TWILIO_AUTH_TOKEN")
+app.config['TWILIO_PHONE_NUMBER'] = os.getenv("TWILIO_PHONE_NUMBER")
+app.config['DEBUG'] = os.getenv("DEBUG", "False") == "True"
+app.config['PORT'] = int(os.getenv("PORT", 5000))
 
+# LOGGER SETUP
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s | %(message)s')
+logger = logging.getLogger('CubixAssistant')
 
-# LOGGING SETUP
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
-logger = logging.getLogger('HospitalityAI')
-
-
-# SERVICE INITIALIZATION
-twilio_client = Client(app.config['TWILIO_ACCOUNT_SID'], app.config['TWILIO_AUTH_TOKEN'])
+# API CLIENTS
+twilio_bot = Client(app.config['TWILIO_ACCOUNT_SID'], app.config['TWILIO_AUTH_TOKEN'])
 openai.api_key = app.config['OPENAI_API_KEY']
 
-scheduler = BackgroundScheduler(daemon=True)
-scheduler.start()
+# BACKGROUND TASKS
+cron_runner = BackgroundScheduler(daemon=True)
+cron_runner.start()
 
-
-# MESSAGE TEMPLATES
-MESSAGE_TEMPLATES = {
-    'confirmation': "✅ Booking Confirmed\nRoom {room} blocked from {start} to {end}",
-    'price_update': "💲 Price Updated\nRoom {room} set to ₹{price} on {date}",
-    'checkin': "🔑 Check-in Instructions\nCode: {code}\nMap: {map_url}",
-    'error': "❌ Error\n{message}\nOur team is fixing this!"
+# ========== WHATSAPP MESSAGE TEMPLATES ==========
+REPLY_TEMPLATES = {
+    'room_locked': "Hey! Room {room} is blocked from {start} to {end}. Enjoy your stay!",
+    'rate_updated': "Rate set: Room {room} now costs ₹{price} on {date}",
+    'entry_pass': "Your Check-in Code: {code}\nMap: {map_url}",
+    'oops': "Something broke: {message}\nTeam CUBIX is on it."
 }
 
 
-# COMMAND PARSER
-def parse_command(message):
+# ========== MESSAGE PARSER ==========
+def cubix_parse(message):
+    """Yash handles command understanding here."""
     block_pattern = r"block room (\d+) from (.+?) to (.+)"
     price_pattern = r"set price to ₹?(\d+) on (.+)"
 
@@ -71,86 +80,93 @@ def parse_command(message):
             max_tokens=150
         )
         return json.loads(response.choices[0].message['content'])
+
     except Exception as e:
-        logger.error(f"NLP fallback failed: {str(e)}")
-        raise ValueError("Couldn't understand your command. Please try again.")
+        logger.exception("OpenAI fallback failed")
+        raise ValueError("🤖 Couldn't understand your command. Try a simpler format.")
 
 
-# SIMULATED DATABASE LOGGER
-def save_command(command):
-    logger.info(f"Simulated DB Save: {command}")
+# ========== SIMULATED DB LOGGER ==========
+def krish_log_command(data):
+    logger.info(f"[Saved by Krish] Command logged: {data}")
 
 
-# WHATSAPP SENDER
-def send_whatsapp(to, template_name, **context):
+# ========== MESSAGE DISPATCHER ==========
+def devansh_notify_user(number, template, **details):
     try:
-        body = MESSAGE_TEMPLATES[template_name].format(**context)
-        twilio_client.messages.create(
-            body=body,
+        msg = REPLY_TEMPLATES[template].format(**details)
+        twilio_bot.messages.create(
+            body=msg,
             from_='whatsapp:' + app.config['TWILIO_PHONE_NUMBER'],
-            to='whatsapp:' + to
+            to='whatsapp:' + number
         )
         return True
     except Exception as e:
-        logger.error(f"WhatsApp send failed: {str(e)}")
+        logger.error(f"Devansh's message failed: {str(e)}")
         return False
 
 
-# DAILY BACKGROUND JOB
+# ========== DAILY JOB BY KRISH ==========
+@cron_runner.scheduled_job('cron', hour=8)
+def cubix_daily_job():
+    logger.info("[Cron Job] Daily task ran. No operation defined yet.")
 
-@scheduler.scheduled_job('cron', hour=8)
-def send_daily_updates():
-    logger.info("Daily update job ran (no actual work configured).")
+
+# ========== ROUTES ==========
+@app.route('/ping')
+def cubix_home():
+    return jsonify({"msg": "Cubix Hospitality AI is Live!"}), 200
 
 
-# ROUTES
 @app.route('/')
-def home():
-    return jsonify({"message": "✅ Hospitality AI is running!"}), 200
+def homepage():
+    return jsonify({"message": "🚀 Cubix Hospitality AI is running!", "status": "OK"}), 200
 
-@app.route('/health')
-def health_check():
+
+@app.route('/status')
+def cubix_health():
     return jsonify({
-        "status": "active",
-        "services": {
-            "scheduler": "running" if scheduler.running else "stopped",
-            "database": "disabled"
+        "status": "working",
+        "modules": {
+            "cron": "running" if cron_runner.running else "not running",
+            "db": "simulated"
         }
     }), 200
 
+
 @app.route('/whatsapp', methods=['POST'])
-def whatsapp_webhook():
+def cubix_whatsapp_webhook():
     try:
         sender = request.form.get('From', '').split(':')[-1]
         message_body = request.form.get('Body', '').strip()
 
         logger.info(f"Incoming from {sender} > {message_body}")
 
-        command = parse_command(message_body)
-        save_command(command)
+        command = cubix_parse(message_body)
+        krish_log_command(command)
 
         if command['command'] == 'block_room':
-            send_whatsapp(sender, 'confirmation', room=command['room'], start=command['from'], end=command['to'])
+            devansh_notify_user(sender, 'room_locked', room=command['room'], start=command['from'], end=command['to'])
         elif command['command'] == 'set_price':
-            send_whatsapp(sender, 'price_update', room=command['room'], price=command['price'], date=command['date'])
+            devansh_notify_user(sender, 'rate_updated', room=command['room'], price=command['price'],
+                                date=command['date'])
 
         resp = MessagingResponse()
         resp.message("✅ Command processed successfully.")
         return str(resp)
 
     except Exception as e:
-        logger.exception("Processing error")
+        logger.exception("❌ Processing error")
         if 'sender' in locals():
-            send_whatsapp(sender, 'error', message=str(e))
+            devansh_notify_user(sender, 'oops', message=str(e))
         resp = MessagingResponse()
-        resp.message("❌ Oops! Something went wrong.")
+        resp.message("❌ Something went wrong.")
         return str(resp)
 
 
-# RUN APP
-
+# ========== RUN SERVER ==========
 if __name__ == '__main__':
-    scheduler.add_job(send_daily_updates, 'cron', hour=8)
+    cron_runner.add_job(cubix_daily_job, 'cron', hour=8)
     app.run(
         host='0.0.0.0',
         port=app.config.get('PORT', 5000),
